@@ -106,18 +106,35 @@ func (s *Service) Run(ctx context.Context) {
 	defer ticker.Stop()
 
 	doSend := func() {
+		var settings *models.Settings
+		err := s.db.InTransaction(func(tx *reform.TX) error {
+			var e error
+			if settings, e = models.GetSettings(tx); e != nil {
+				return e
+			}
+			return nil
+		})
+		if settings.Telemetry.Disabled {
+			s.l.Info("disabled via settings")
+			return
+		}
+
 		report, err := s.prepareReport(ctx)
 		if err != nil {
 			s.l.Debugf("Failed to prepare report: %s.", err)
 			return
 		}
 
-		err = s.send(ctx, report)
-		if err != nil {
-			s.l.Debugf("Telemetry info not sent, due to error: %s.", err)
-			return
+		if s.config.Reporting.Send {
+			err = s.send(ctx, report)
+			if err != nil {
+				s.l.Debugf("Telemetry info not sent, due to error: %s.", err)
+				return
+			}
+			s.l.Debug("Telemetry info sent.")
+		} else {
+			s.l.Info("Telemetry sent is disabled.")
 		}
-		s.l.Debug("Telemetry info sent.")
 	}
 
 	if s.config.Reporting.SendOnStart {
@@ -192,10 +209,6 @@ func (s *Service) makeMetric(ctx context.Context) (*pmmv1.ServerMetric, error) {
 		var e error
 		if settings, e = models.GetSettings(tx); e != nil {
 			return e
-		}
-
-		if settings.Telemetry.Disabled {
-			return errors.New("disabled via settings")
 		}
 
 		if _, err := models.GetPerconaSSODetails(ctx, s.db.Querier); err == nil {
